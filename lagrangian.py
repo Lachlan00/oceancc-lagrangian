@@ -36,12 +36,13 @@ def killOld(particle, fieldset, time):
     if particle.age >= 365:
         particle.delete()
 
-########
-
-########
+######################################################################
+# Create particle generation region but filter by southward velocity #
+######################################################################
 def particle_generator_region_filterV(region, ROMS_dir, V_threshold, time_name='ocean_time'):
     """
-    Will need to update this code to use dimensions and variable dictionary
+    Will need to update this code to use dimensions and variable dictionary to make
+    it more universal
     """
     print('Filtering generation zone based with V less than or equal to '+str(V_threshold))
     file_ls = [f for f in listdir(ROMS_dir) if isfile(join(ROMS_dir, f))]
@@ -85,7 +86,7 @@ def particle_generator_region_filterV(region, ROMS_dir, V_threshold, time_name='
     # check if any particles
     if len(time) == 0:
         sys.exit('Error: No V values less than or equal to '+str(V_threshold)+' ms-1 found within the generation region..')
-    # convert from days from 1990 to days from origin
+    # convert from days from 1990 to seconds since origin
     time = (time - time[0])
 
     return lons, lats, time
@@ -173,7 +174,7 @@ def particle_positions_filterV(filenames, variables, dimensions, indicies, gener
 #####################
 # Particle training #
 #####################
-def particle_training(particlefn, ROMS_dir, ouputfn):
+def particle_training(particlefn, ROMS_dir, ouputfn, timeorigin_traj=datetime(1994, 1, 1, 12), timeorigin_ROMS=datetime(1990, 1, 1)):
     """
     Generate training data from particle position netCDF file
     """
