@@ -3,6 +3,7 @@ import math
 import numpy as np
 from datetime import datetime, timedelta
 import re
+from sklearn.neighbors import KernelDensity 
 
 #######################
 # Add to list quickly #
@@ -167,6 +168,20 @@ def mean_ratioA(df):
     df_mean['index'] = index
 
     return df_mean
+
+##################
+# Kernel density #
+##################
+def kde_estimate(lon, lat):
+    """
+    Calculate kernel density estimation from lon/lat arrays
+    https://jakevdp.github.io/PythonDataScienceHandbook/05.13-kernel-density-estimation.html
+    """
+    latlon = np.vstack([lat, lon]).T
+    kde = KernelDensity(bandwidth=0.03, metric='haversine')
+    kde.fit(np.radians(latlon))
+
+    return kde   
 
 
 

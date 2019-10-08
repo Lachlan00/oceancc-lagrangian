@@ -1,0 +1,3 @@
+devnotes
+
+Probably should change generation_region to be a NSEW dictionary to keep tings consistent
