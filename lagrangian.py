@@ -57,7 +57,7 @@ def killSwitch(particle, fieldset, time):
 ######################################################################
 # Create particle generation region but filter by southward velocity #
 ######################################################################
-def particle_generator_region_filterV(region, ROMS_dir, V_threshold, time_name='ocean_time', maxParticlesStep=None):
+def particle_generator_region_filterV(region, ROMS_dir, V_threshold, time_name='ocean_time', maxParticlesStep=None, returnSteps=True):
     """
     Will need to update this code to use dimensions and variable dictionary to make
     it more universal
@@ -74,6 +74,7 @@ def particle_generator_region_filterV(region, ROMS_dir, V_threshold, time_name='
     # pbar = ProgressBar(max_value=len(file_ls))
     # now cycle through the ROMS data and get lat and lon
     # values based on the southward velocity threshold
+    steps = 0
     for i in range(0, len(file_ls)):
         fh = Dataset(ROMS_dir + file_ls[i], mode='r')
         # extract the time lats and lons and V
@@ -94,6 +95,7 @@ def particle_generator_region_filterV(region, ROMS_dir, V_threshold, time_name='
             array_lons = nc_lons[nc_v[j] <= V_threshold].ravel()
             # check if zero and if so skip
             if len(array_lons) == 0:
+                steps += 1
                 continue
             # now lats
             array_lats = nc_lats[nc_v[j] <= V_threshold].ravel()
@@ -118,6 +120,8 @@ def particle_generator_region_filterV(region, ROMS_dir, V_threshold, time_name='
             lons_capture[j] = array_lons
             lats_capture[j] = array_lats
             time_capture[j] = array_time
+            # get timesteps
+            steps += 1
                 
 
         # concat collected arrays (Much faster when not done in loop)
@@ -131,7 +135,10 @@ def particle_generator_region_filterV(region, ROMS_dir, V_threshold, time_name='
     # convert from seconds from 1990 to seconds since origin
     time = (time - time[0])
 
-    return lons, lats, time
+    if returnSteps:
+        return lons, lats, time, steps
+    else:
+        return lons, lats, time
 
 #########################################################
 # Create particle generation region from lon-lat arrays #
@@ -196,21 +203,23 @@ def particle_positions_filterV(filenames, variables, dimensions, indicies, gener
     Generate a netCDF file of particle psoitions
     """
     # generate feildset from netCDF files
+    print('Loading the fieldset..')
     if indicies is not None:
-        fieldset = FieldSet.from_netcdf(filenames, variables, dimensions, indicies,  deferred_load=False)
+        fieldset = FieldSet.from_netcdf(filenames, variables, dimensions, indicies, deferred_load=False)
     else: 
         fieldset = FieldSet.from_netcdf(filenames, variables, dimensions, deferred_load=False)
     # make particle generation zone
-    lons, lats, time = particle_generator_region_filterV(generation_region, ROMS_dir, V_threshold, maxParticlesStep=maxParticlesStep)
-    print(str(len(time))+' paticles seeds generated')
+    lons, lats, time, steps = particle_generator_region_filterV(generation_region, ROMS_dir, V_threshold, maxParticlesStep=maxParticlesStep)
+    print(str(len(time))+' paticle seeds generated')
     print(time)
 
     # full 20 year run
     if runtime == 'full':
-        runtime = len(time)
+        runtime = steps - 1
 
-    # convert runtime to days  
-    runtime = timedelta(days=runtime)     
+    # convert runtime to days 
+    runlength = runtime 
+    runtime = timedelta(days=runtime)
 
     # prior to making the particle set mught be worth filtering based on the runlength
     lons = lons[np.isin(time, np.unique(time)[0:runlength+1])]
@@ -220,16 +229,19 @@ def particle_positions_filterV(filenames, variables, dimensions, indicies, gener
     print(time)
 
     # make particle set
+    print('\nGenerating particle set...')
     pset = ParticleSet(fieldset=fieldset, pclass=oceancc_particle, lon=lons, lat=lats, time=time)
     # set ageing kernel
     kernels = pset.Kernel(ageingParticle) + pset.Kernel(stuckParticle) + pset.Kernel(killSwitch) + pset.Kernel(AdvectionRK4)
 
     # collect data
+    # output_file = pset.ParticleFile(name=outputfn, outputdt=sampledt)
     pset.execute(kernels,
-                 runtime=runtime,  # runtime controls the interval of the plots
+                 runtime=runtime,
                  dt=sampledt,
                  recovery={ErrorCode.ErrorOutOfBounds: deleteParticle},
                  output_file=pset.ParticleFile(name=outputfn, outputdt=sampledt))
+    # output_file.export()
 
 #####################
 # Particle training #
@@ -337,7 +349,7 @@ def particle_animation_OP(filenames, variables, dimensions, indicies, generation
         # First plot the particles
         pset.show(savefile=out_dir + 'particles'+str(i).zfill(3), field=fieldset.V, land=True, vmin=vmin, vmax=vmax)
 
-        if i == runlength:
+        if i == runlength-1:
             break
 
         # Then advect the particles for 1 day
@@ -391,7 +403,7 @@ def particle_animation(filenames, variables, dimensions, indicies, generation_re
         
         fig.savefig(out_dir+'particles'+str(i).zfill(3))
 
-        if i == runlength:
+        if i == runlength-1:
             break
 
         # Then advect the particles for 1 day
@@ -418,13 +430,13 @@ def particle_animation_filterV(filenames, variables, dimensions, indicies, gener
     else: 
         fieldset = FieldSet.from_netcdf(filenames, variables, dimensions, deferred_load=False)
     # make particle generation zone
-    lons, lats, time = particle_generator_region_filterV(generation_region, ROMS_dir, V_threshold, maxParticlesStep=maxParticlesStep)
-    print(str(len(time))+' paticles seeds generated')
+    lons, lats, time, steps = particle_generator_region_filterV(generation_region, ROMS_dir, V_threshold, maxParticlesStep=maxParticlesStep)
+    print(str(len(time))+' paticle seeds generated')
     print(time)
 
     # full 20 year runs
     if runlength == 'full':
-        runlength = len(time)
+        runlength = steps
 
     # prior to making the particle set mught be worth filtering based on the runlength
     lons = lons[np.isin(time, np.unique(time)[0:runlength+1])]
@@ -464,10 +476,10 @@ def particle_animation_filterV(filenames, variables, dimensions, indicies, gener
             fig = plot_field_particles(m, field=fieldset.V.data[i], lons=fieldset.V.lon, lats=fieldset.V.lat,
                 vmin=vmin, vmax=vmax, cmap=cmap, pset=pset, title=title, filter_t0=True, plot_region=True, region=generation_region)
         
-        fig.savefig(out_dir+'particles'+str(i).zfill(3))
+        fig.savefig(out_dir+'particles'+str(i).zfill(4))
 
         # stop if at limit (no more advection)
-        if i == runlength:
+        if i == runlength-1:
             break
         # Then advect the particles for 1 day
         pset.execute(kernels,

@@ -6,6 +6,7 @@ from config import *
 # Get particle position dataset #
 #################################
 if particle_positions:
+    print('\nBUILDING TRAJECTORIES\n')
     particle_positions_filterV(filenames=filenames, variables=variables, dimensions=dimensions, indicies=indicies,
         generation_region=generation_region, ROMS_dir=ROMS_dir, runtime=runlength, 
         sampledt=sampledt, outputfn=particlefn, V_threshold=V_threshold, maxParticlesStep=maxParticlesStep)
@@ -14,6 +15,7 @@ if particle_positions:
 # Make animations #
 ###################
 if particle_animation:
+    print('\nBUILDING ANIMATION\n')
     particle_animation_filterV(filenames=filenames, variables=variables, dimensions=dimensions, indicies=indicies,
         generation_region=generation_region, repeatdt=sampledt, sampledt=sampledt, out_dir=animation_output,
         runlength=runlength, domain=domain, vmin=vmin, vmax=vmax, cmap=cmocean.cm.speed, ROMS_dir=ROMS_dir, V_threshold=V_threshold, 

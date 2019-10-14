@@ -4,8 +4,8 @@ import cmocean
 ############
 # Analysis #
 ############
-particle_positions = False
-particle_animations = True
+particle_positions = True
+particle_animation = False
 produce_training_data = False
 
 #################################
@@ -18,6 +18,7 @@ variables = {'U': 'ubar',
 dimensions = {'U': {'lon': 'lon_u', 'lat': 'lat_u', 'time': 'ocean_time'},
               'V': {'lon': 'lon_v', 'lat': 'lat_v', 'time': 'ocean_time'}}
 indicies = None
+# indicies = {'depth':[29]}
 
 #######################
 # Particle generation #
@@ -26,13 +27,13 @@ generation_region = [152.5, 154.8, -30, -26]
 V_threshold=-0.4
 sampledt=timedelta(days=1)
 p_timeorigin=datetime(1994, 1, 1, 12)
-runlength = 'full'
-maxParticlesStep = None # max particles generated per timestep
+runlength = 4
+maxParticlesStep = 5 # max particles generated per timestep
 
 #############################
 # Particle positions output #
 #############################
-particlefn = 'data/particle_positions.nc'
+particlefn = 'data/particle_trajectories_test.nc'
 
 #######################
 # Plotting parameters #

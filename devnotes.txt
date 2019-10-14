@@ -1,3 +1,5 @@
 devnotes
 
-Probably should change generation_region to be a NSEW dictionary to keep tings consistent
+Probably should change generation_region to be a NESW dictionary to keep tings consistent
+
+Updated the module to use latest version of Parcels (2.1.1). Created a secondary virtual envrionment for the new version called "oceancc-lagrangian" with the new version. "py3_parcels" is still version 2.0.0. 
