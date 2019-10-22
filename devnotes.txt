@@ -3,3 +3,12 @@ devnotes
 Probably should change generation_region to be a NESW dictionary to keep tings consistent
 
 Updated the module to use latest version of Parcels (2.1.1). Created a secondary virtual envrionment for the new version called "oceancc-lagrangian" with the new version. "py3_parcels" is still version 2.0.0. 
+
+cdo notes:
+https://code.mpimet.mpg.de/projects/cdo/wiki/Tutorial
+time subset of netCDF
+cdo -seltimestep,1/30 EAC_20y_merge.nc EAC_20y_merge_subset.nc 
+
+2019-10-17
+Changed line 236 in particlesfile.py in the Ocean Parcels source code to fix bug #670. See commit #672 https://github.com/OceanParcels/parcels/pull/672/commits/c4289be18ec2d1e5d3cb882765e5d0fafd6072f8#diff-c58dc16266829b3847dab21f1236a22b
+Will likely be officially fixed in Parcels v2.1.2 (not yet released)

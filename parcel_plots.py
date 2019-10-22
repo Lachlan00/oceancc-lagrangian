@@ -7,12 +7,21 @@ from matplotlib.patches import Polygon
 from itertools import compress
 import seaborn as sns
 
+############
+# Make map #
+############
 def make_map(domain):
+    """
+    Make basemap for plotting
+    """
     m = Basemap(projection='merc', llcrnrlat=domain['S'], urcrnrlat=domain['N'],
         llcrnrlon=domain['W'], urcrnrlon=domain['E'], lat_ts=20, resolution='h')
 
     return m
 
+#####################
+# Plot the fieldset #
+#####################
 def plot_field(m, field, lons, lats, vmin, vmax, cmap, title):
     plt.close("all")
     fig = plt.figure()
@@ -36,6 +45,9 @@ def plot_field(m, field, lons, lats, vmin, vmax, cmap, title):
 
     return fig
 
+#############################################
+# Plot the fieldset with particles overlaid #
+#############################################
 def plot_field_particles(m, field, lons, lats, vmin, vmax, cmap, pset, title, filter_t0=False, plot_region=False, region=None):
     """
     Plot particles over field
@@ -79,18 +91,27 @@ def plot_field_particles(m, field, lons, lats, vmin, vmax, cmap, pset, title, fi
 
     return fig
 
+#########################
+# Particle density plot #
+#########################
 def particle_density_plot(x, y, xlim, ylim):
     plt.close("all")
     sns_plot = sns.jointplot(x=x, y=y, kind="kde", xlim=xlim, ylim=ylim, joint_kws={'shade_lowest':False})
 
     return sns_plot
 
+###############################################
+# Particle density plot with overlaid scatter #
+###############################################
 def particle_scatter_density_plot(x, y, xlim, ylim):
     plt.close("all")
     sns_plot = sns.jointplot(x=x ,y=y, xlim=xlim, ylim=ylim, color="k", joint_kws={'alpha':0.4}).plot_joint(sns.kdeplot, zorder=0, n_levels=6)
 
     return sns_plot
 
+######################################
+# Particle density plot on a basemap #
+######################################
 def particle_density_map(m, field, lons, lats, vmin, vmax, cmap, pset, title):
     """
     Plot particles
@@ -135,3 +156,31 @@ def particle_density_map(m, field, lons, lats, vmin, vmax, cmap, pset, title):
 
     return fig
 
+####################################
+# Plot hydrodynamic grid as points #
+####################################
+def plot_grid(lat_array, lon_array, downsample=1):
+    plt.close("all")
+    fig = plt.figure()
+    fig.subplots_adjust(left=0., right=1., bottom=0., top=0.9)
+    plt.scatter(lon_array[::downsample], lat_array[::downsample], c='k', s=1, linewidths=0.5)
+    plt.ylabel('Lat')
+    plt.xlabel('Lon')
+    plt.show()
+
+    return fig
+
+############################################################
+# Plot current sampling process (EAC vs nonEAC selections) #
+############################################################
+def plot_grid_selection(eta, xi, col, xlim, ylim):
+    plt.close("all")
+    fig, ax = plt.subplots()
+    # fig.subplots_adjust(left=0., right=1., bottom=0., top=0.9)
+    ax.scatter(xi, eta, c=col, s=1, linewidths=0.5)
+    plt.ylabel('eta')
+    plt.xlabel('xi')
+    ax.set_xlim([xlim[0], xlim[1]])
+    ax.set_ylim([ylim[0], ylim[1]])
+
+    return fig

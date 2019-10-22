@@ -11,6 +11,11 @@ import cmocean
 import sys
 from operator import attrgetter
 import random
+import numba
+import functools
+from scipy.spatial import cKDTree
+import math
+import pickle
 
 from data_processes import *
 from parcel_plots import *
@@ -198,7 +203,8 @@ def particle_positions(filenames, variables, dimensions, indicies, generation_re
 #######################################################
 # Get trainign data through lagrangian particle model #
 #######################################################
-def particle_positions_filterV(filenames, variables, dimensions, indicies, generation_region, ROMS_dir, runtime, sampledt, outputfn, V_threshold, maxParticlesStep=None):
+def particle_positions_filterV(filenames, variables, dimensions, indicies, generation_region, ROMS_dir, runtime, sampledt, 
+    outputfn, V_threshold, maxParticlesStep=None):
     """
     Generate a netCDF file of particle psoitions
     """
@@ -235,99 +241,218 @@ def particle_positions_filterV(filenames, variables, dimensions, indicies, gener
     kernels = pset.Kernel(ageingParticle) + pset.Kernel(stuckParticle) + pset.Kernel(killSwitch) + pset.Kernel(AdvectionRK4)
 
     # collect data
-    # output_file = pset.ParticleFile(name=outputfn, outputdt=sampledt)
+    output_file = pset.ParticleFile(name=outputfn, outputdt=sampledt)
     pset.execute(kernels,
                  runtime=runtime,
                  dt=sampledt,
                  recovery={ErrorCode.ErrorOutOfBounds: deleteParticle},
-                 output_file=pset.ParticleFile(name=outputfn, outputdt=sampledt))
-    # output_file.export()
+                 output_file=output_file)
+    output_file.export()
 
 #####################
 # Particle training #
 #####################
-def particle_training(particlefn, ROMS_dir, ouputfn, timeorigin_traj=datetime(1994, 1, 1, 12), timeorigin_ROMS=datetime(1990, 1, 1), 
-    animate=False, plot_type='density', anim_out='anim/density/'):
+def particle_training(particle_trajectories_fn, ROMS_file, outputfn, timeorigin_traj=datetime(1994, 1, 1, 12), 
+    timeorigin_ROMS=datetime(1990, 1, 1), animate=False, plot_type='grid_scatter', anim_out='anim/grid_selection/', 
+    spinup=timedelta(days=364), coord_rounding=2, method='kdtree', cell_radius=15):
     """
     Generate training data from particle position netCDF file
+    This currently does not support hydrodynamic models with split netCDF
+    file sources 
     """
     # read in particle trajectory data
-    fh = Dataset(particlefn, mode='r')
+    fh = Dataset(particle_trajectories_fn, mode='r')
     # build particle arrays
     # 'p' stands for 'particle'
+    print('Loading particle trajectories..')
     p_time = fh.variables['time'][:]
     p_lats = fh.variables['lat'][:]
     p_lons = fh.variables['lon'][:]
     # for each time cycle through and get all lats and lons
     # calculate timestep series (1d array)
-    p_t_start = np.unique(p_time).min()
-    p_t_step = np.unique(p_time)[1]
-    p_t_end = np.unique(p_time).max()
+    print('Constructing particle timeseries..')
+    p_time_unique = np.unique(p_time) # too slow to repeat this step
+    p_t_start = p_time_unique.min()
+    p_t_step = p_time_unique[1] - p_time_unique[0]
+    p_t_end = p_time_unique.max()
     p_t_series = np.arange(p_t_start, p_t_end, p_t_step)
-    # coordinate series (list of 2d arrays)
-    p_lon_series = [p_lons[p_time == t].data for t in p_t_series]
-    p_lat_series = [p_lats[p_time == t].data for t in p_t_series]
-    # get particle extent (for plotting)
-    p_lon_max = np.array([x.max() for x in p_lon_series]).max()
-    p_lon_min = np.array([x.min() for x in p_lon_series]).min()
-    p_lat_max = np.array([x.max() for x in p_lat_series]).max()
-    p_lat_min = np.array([x.min() for x in p_lat_series]).min()
 
-    # load in the ROMS files
-    # get file list
-    file_ls = [f for f in listdir(ROMS_dir) if isfile(join(ROMS_dir, f))]
-    file_ls = list(filter(lambda x:'.nc' in x, file_ls))
-    file_ls = sorted(file_ls)
-    # obtain ROMS dimension information
-    # load a file
-    nc_file = ROMS_dir + file_ls[0]
-    fh = Dataset(nc_file, mode='r')
+    # load in the ROMS file
+    fh = Dataset(ROMS_file, mode='r')
     ROMS_lats = fh.variables['lat_rho'][:]
     ROMS_lons = fh.variables['lon_rho'][:]
+    ROMS_time = fh.variables['ocean_time'][:]
 
     # if making map then setup basemap and the grids in advance so we don't have to 
     # reconstruct the map on each iteration
     if (animate and (plot_type == 'density_map')):
-        domain = {'N':ROMS_lat.max(), 'S':lROMS_lat.min()-0.2,
-                  'W':ROMS_lon.min()-0.2, 'E':ROMS_lon.max()+0.2}
+        domain = {'N':ROMS_lats.max(), 'S':ROMS_lats.min()-0.2,
+                  'W':ROMS_lons.min()-0.2, 'E':ROMS_lons.max()+0.2}
         m = make_map(domain)
+
+    # convert the particle time series into the same time format as the ROMS model
+    p_t_series = p_t_series + (timeorigin_traj - timeorigin_ROMS).total_seconds()
+    p_time = p_time + (timeorigin_traj - timeorigin_ROMS).total_seconds()
+
+    # convert spinup to seconds and add to pset time
+    spinup_days = spinup.days
+    spinup = spinup.total_seconds()
+    spinup = p_t_series[0] + spinup
+
+    # extract landmask to filter sampling
+    land_mask = fh.variables['temp'][0, 0].mask
+    # get coordinates of True values
+    land_mask = np.where(land_mask)
+    # make into tuples
+    land_mask = tuple(zip(land_mask[0], land_mask[1]))
+
+    # arrays to hold data
+    temp_capture = [np.nan]*len(p_t_series)
+    salt_capture = [np.nan]*len(p_t_series)
+    lats_capture = [np.nan]*len(p_t_series)
+    time_capture = [np.nan]*len(p_t_series)
+    class_capture = [np.nan]*len(p_t_series)
+
+    # construct k-dimensional tree for quick lookups
+    if method == 'kdtree':
+        # Read latitude and longitude from file into numpy arrays
+        latvals = ROMS_lats[:] * math.pi/180.0
+        lonvals = ROMS_lons[:] * math.pi/180.0
+        clat,clon = np.cos(latvals), np.cos(lonvals)
+        slat,slon = np.sin(latvals), np.sin(lonvals)
+        # Build kd-tree from big arrays of 3D coordinates
+        triples = list(zip(np.ravel(clat*clon), np.ravel(clat*slon), np.ravel(slat)))
+        kdt = cKDTree(triples)
+
+    # make progress bar
+    pbar = ProgressBar(max_value=len(p_t_series)-spinup_days)
+    print('Extracting data from hydrodynamic model..\n')
 
     # iterate through timestep series and use particle coordinates to create a
     # density contour.
-    """
-    Actually I should iterate through the ROMS model here else there'll be no way
-    to know which ncfile to open. I can cross reference which lat/lon arrays using 
-    the t_sereis value. 
-    """
-    # Iterate through the netCDF files and the timesteps
-    for i in range(0, len(file_ls)):
-        fh = Dataset(ROMS_dir + file_ls[i], mode='r')
-        # extract the time
-        ROMS_time = fh.variables['ocean_time'][:]
+    i = 0
+    for pset_idx in numba.prange(0, len(p_t_series)):
+        # first check the spin up
+        if p_t_series[pset_idx] < spinup:
+            continue
+        # select the particle set at the right timestamp
+        pset_slice = np.where(p_time == p_t_series[pset_idx])
+        pset_lons = p_lons[pset_slice]
+        pset_lats = p_lats[pset_slice]
+        # filter out duplicate particle positions (round based on grid size)
+        pset_lons = [round(x, coord_rounding) for x in pset_lons]
+        pset_lats = [round(x, coord_rounding) for x in pset_lats]
+        pset_coords = tuple(zip(pset_lons, pset_lats))
+        pset_coords = list(set(pset_coords))
+        # now find the grid cell positions for the particle positions (eta_rho, xi_rho)
+        if method == 'kdtree':
+            grid_dim_array = [kdtree_process(kdt, pcoord[0], pcoord[1], ROMS_lats.shape) for pcoord in pset_coords]
+        elif method == 'tunnel_distance_parallel':
+            grid_dim_array = tunnel_parallelise(pset_coords, ROMS_lats, ROMS_lons)
+        elif method == 'tunnel_distance':
+            grid_dim_array = [tunnel_fast(ROMS_lons, ROMS_lats, pcoord[0], pcoord[1]) for pcoord in pset_coords]
+        else:
+            print('Error: unknown method')
+            #return
+        # remove duplicates
+        grid_dim_array = list(set(grid_dim_array))
+        # make integers
+        grid_dim_array = [(int(x[0]), int(x[1])) for x in grid_dim_array]
+        # now sample an equal number of random points with no particles
+        # first set up cells that are not allowed within N cells
+        forbidden_cells = Nneighbours(grid_dim_array, ROMS_lats.shape, cell_radius)
+        # make random indicies
+        rand_set_done = False
+        n = 2
+        while not rand_set_done:
+            # NOTE: parallelise these removals
+            rand_eta = np.random.randint(ROMS_lats.shape[0], size=n*len(grid_dim_array))
+            rand_xi = np.random.randint(ROMS_lats.shape[1], size=n*len(grid_dim_array))
+            # remove duplicates and create tuple set
+            rand_set = list(set(tuple(zip(rand_eta, rand_xi))))
+            # remove any that contain particles are on land or near particle cells
+            rand_set = [coord for coord in rand_set if coord not in land_mask]
+            rand_set = [coord for coord in rand_set if coord not in forbidden_cells]
+            # check if set is long enough
+            if len(rand_set) >= len(grid_dim_array):
+                rand_set_done = True
+            else:
+                n += 1
+        # now take the first N tuples
+        rand_set = rand_set[:len(grid_dim_array)]
+        # extract the data from the model
+        # split the tuples
+        grid_dim_array = list(zip(*grid_dim_array))
+        rand_set = list(zip(*rand_set))
+        # find the ROMS ocean_time slice index
+        ROMS_idx = int(np.where(ROMS_time == p_t_series[pset_idx])[0])
+        # make dimensions
+        eta = grid_dim_array[0]+rand_set[0]
+        xi = grid_dim_array[1]+rand_set[1]
+        # retrive the data
+        temp_capture[i] = fh.variables['temp'][ROMS_idx, 0][eta, xi].data
+        salt_capture[i] = fh.variables['salt'][ROMS_idx, 0][eta, xi].data
+        # Lats are float64, so get lats and convert from float64 to float32 (64 is too slow when indexing)
+        lats = fh.variables['lat_rho'][:]
+        lats = np.float32(lats)
+        lats_capture[i] = lats[eta, xi].data
+        # make datetimes
+        time_capture[i] = [timeorigin_ROMS + timedelta(seconds=p_t_series[pset_idx])]*(2*len(grid_dim_array[0]))
+        # make class array
+        class_capture[i] = ['A']*len(grid_dim_array[0]) + ['B']*len(rand_set[0])
 
-        # cycle through each time instance and extract lats and lons and ravel
-        # into 1 dimensional arrays after filtering
-        for j in range(0, nc_v.shape[0]):
-            test = 1
+        # animate
+        if animate:
+            fig = plot_grid_selection(eta, xi, ['orange']*len(grid_dim_array[0])+['blue']*len(rand_set[0]), ylim=(0, ROMS_lats.shape[0]), xlim=(0, ROMS_lats.shape[1]))
+            fig.savefig(anim_out+'grid_selection'+str(i).zfill(4))
+
+        # permutate
+        i += 1
+        # update progress
+        pbar.update(i)
+        
+    # save the datasets
+    print('\nMerging the captured data...')
+    # merge lists and remove nans
+    temp_capture = [x for x in np.concatenate(temp_capture, axis=None) if ~np.isnan(x)]
+    salt_capture = [x for x in np.concatenate(salt_capture, axis=None) if ~np.isnan(x)]
+    lats_capture = [x for x in np.concatenate(lats_capture, axis=None) if ~np.isnan(x)]
+    time_capture = [x for x in np.concatenate(time_capture, axis=None) if isinstance(x, datetime)]
+    class_capture = [x for x in np.concatenate(class_capture, axis=None) if x != 'nan']
+    # 
+
+    # make pandas dataframe
+    print('Producing dataframe...')
+    df = pd.DataFrame({
+        'time':time_capture,
+        'lat':lats_capture,
+        'temp':temp_capture,
+        'salt':salt_capture,
+        'class':class_capture
+        })
+
+    # save the dataframe as pickle and csv
+    print('Saving training data as pickle..')
+    df.to_pickle(outputfn)
+    print('Done!')
 
     """
     Need to remove below code
     """
-    for i in range(0, len(t_series)):
-        # get iteration
-        t = t_series[i]
-        lon = lon_series[i]
-        lat = lat_series[i]
+    # for i in range(0, len(t_series)):
+    #     # get iteration
+    #     t = t_series[i]
+    #     lon = lon_series[i]
+    #     lat = lat_series[i]
         
-        # plot
-        if animate:
-            if plot_type == 'density':
-                fig = particle_density_plot(lon.ravel(), lat.ravel(), xlim=[lon_min, lon_max], ylim=[lat_min, lat_max])
-            if plot_type == 'density_map':
-                fig = particle_density_map(m, lon.ravel(), lat.ravel(), xlim=[lon_min, lon_max], ylim=[lat_min, lat_max])
-            
-            # save figure
-            fig.savefig(anim_out+'density'+str(i).zfill(4))
+    #     # plot
+    #     if animate:
+    #         if plot_type == 'density':
+    #             fig = particle_density_plot(lon.ravel(), lat.ravel(), xlim=[lon_min, lon_max], ylim=[lat_min, lat_max])
+    #         if plot_type == 'density_map':
+    #             fig = particle_density_map(m, lon.ravel(), lat.ravel(), xlim=[lon_min, lon_max], ylim=[lat_min, lat_max])
+    #         # save figure
+    #         fig.savefig(anim_out+'density'+str(i).zfill(4))
 
 ########################################
 # Animate particles with Ocean Parcels #
@@ -401,7 +526,7 @@ def particle_animation(filenames, variables, dimensions, indicies, generation_re
             fig = plot_field_particles(m, field=fieldset.V.data[i], lons=fieldset.V.lon, lats=fieldset.V.lat,
                 vmin=vmin, vmax=vmax, cmap=cmap, pset=pset, title=title, filter_t0=True)
         
-        fig.savefig(out_dir+'particles'+str(i).zfill(3))
+        fig.savefig(out_dir+'particles'+str(i).zfill(4))
 
         if i == runlength-1:
             break
@@ -489,8 +614,6 @@ def particle_animation_filterV(filenames, variables, dimensions, indicies, gener
 
     print('PNGs can be joined with Image Magick.')
     print('convert *.png particle_animation.gif')
-
-
 
 
 
