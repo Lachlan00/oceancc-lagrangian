@@ -1,3 +1,3 @@
-# Oceancc Lagrangian
+# OceanCC Lagrangian
 
 Readme coming soon..
